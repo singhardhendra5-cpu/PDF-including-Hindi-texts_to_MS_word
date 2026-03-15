@@ -175,3 +175,127 @@
     }
   }
 }
+
+/* Accessibility Improvements */
+@layer base {
+  /* Focus visible styles for keyboard navigation */
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [role="button"]:focus-visible {
+    @apply outline-2 outline-offset-2 outline-ring;
+  }
+
+  /* Ensure sufficient color contrast */
+  button,
+  a,
+  label {
+    @apply text-base;
+  }
+
+  /* Improve text readability */
+  body {
+    @apply leading-relaxed;
+  }
+
+  /* Ensure interactive elements are easily clickable */
+  button,
+  a,
+  input,
+  select,
+  textarea {
+    @apply min-h-[44px] min-w-[44px];
+  }
+
+  /* Remove default focus outline and use custom one */
+  :focus {
+    @apply outline-none;
+  }
+
+  /* Reduce motion for users who prefer it */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      @apply !animate-none !transition-none;
+    }
+  }
+
+  /* High contrast mode support */
+  @media (prefers-contrast: more) {
+    body {
+      @apply font-semibold;
+    }
+  }
+}
+
+/* Responsive Design Improvements */
+@layer components {
+  /* Mobile-first responsive utilities */
+  .responsive-grid {
+    @apply grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3;
+  }
+
+  .responsive-padding {
+    @apply px-4 py-6 sm:px-6 sm:py-8 lg:px-8 lg:py-12;
+  }
+
+  .responsive-text {
+    @apply text-sm sm:text-base lg:text-lg;
+  }
+
+  /* Ensure proper spacing on all screen sizes */
+  .safe-area {
+    @apply px-4 sm:px-6 lg:px-8;
+  }
+
+  /* Improve touch targets on mobile */
+  @media (max-width: 640px) {
+    button,
+    a,
+    input,
+    select {
+      @apply min-h-[48px];
+    }
+  }
+
+  /* Responsive typography */
+  h1 {
+    @apply text-2xl sm:text-3xl lg:text-4xl;
+  }
+
+  h2 {
+    @apply text-xl sm:text-2xl lg:text-3xl;
+  }
+
+  h3 {
+    @apply text-lg sm:text-xl lg:text-2xl;
+  }
+
+  /* Ensure proper line length for readability */
+  .max-readable {
+    @apply max-w-3xl;
+  }
+
+  /* Skip to main content link for accessibility */
+  .skip-to-main {
+    @apply absolute -top-12 left-0 z-50 bg-blue-600 text-white px-4 py-2 rounded focus:top-0 transition-all;
+  }
+}
+
+/* Print styles for accessibility */
+@media print {
+  .no-print {
+    @apply hidden;
+  }
+
+  body {
+    @apply bg-white text-black;
+  }
+
+  a {
+    @apply underline;
+  }
+}

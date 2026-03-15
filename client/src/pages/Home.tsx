@@ -3,9 +3,12 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useLocation } from "wouter";
-import { Upload, FileText, Zap, CheckCircle2, Clock } from "lucide-react";
+import { Upload, FileText, Zap, CheckCircle2, Clock, AlertCircle, X } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+
+const MAX_FILE_SIZE_MB = 16;
+const FILE_SIZE_WARNING_MB = 10;
 
 export default function Home() {
   const { user, isAuthenticated } = useAuth();
@@ -16,7 +19,11 @@ export default function Home() {
     stage: "upload" | "processing" | "completed";
     fileName: string;
     conversionId?: number;
+    fileSizeMB?: number;
+    estimatedTimeSeconds?: number;
   } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadMutation = trpc.conversion.uploadAndConvert.useMutation();
   const utils = trpc.useUtils();
@@ -31,57 +38,90 @@ export default function Home() {
   );
 
   // Update progress based on status query
-  if (statusQuery.data && conversionProgress?.conversionId === statusQuery.data.id) {
-    if (statusQuery.data.status === "completed" && conversionProgress.stage !== "completed") {
-      setConversionProgress((prev) =>
-        prev ? { ...prev, stage: "completed" } : null
-      );
-    } else if (statusQuery.data.status === "processing" && conversionProgress.stage === "upload") {
-      setConversionProgress((prev) =>
-        prev ? { ...prev, stage: "processing" } : null
-      );
-    } else if (statusQuery.data.status === "failed") {
-      toast.error(`Conversion failed: ${statusQuery.data.errorMessage || "Unknown error"}`);
-      setConversionProgress(null);
-      setIsConverting(false);
+  useEffect(() => {
+    if (statusQuery.data && conversionProgress?.conversionId === statusQuery.data.id) {
+      if (statusQuery.data.status === "completed" && conversionProgress.stage !== "completed") {
+        setConversionProgress((prev) =>
+          prev ? { ...prev, stage: "completed" } : null
+        );
+        setRetryCount(0);
+        toast.success("Conversion completed successfully!");
+      } else if (statusQuery.data.status === "processing" && conversionProgress.stage === "upload") {
+        setConversionProgress((prev) =>
+          prev ? { ...prev, stage: "processing" } : null
+        );
+      } else if (statusQuery.data.status === "failed") {
+        const errorMsg = statusQuery.data.errorMessage || "Unknown error occurred";
+        setError(errorMsg);
+        toast.error(`Conversion failed: ${errorMsg}`);
+        setConversionProgress(null);
+        setIsConverting(false);
+      }
     }
-  }
+  }, [statusQuery.data, conversionProgress?.conversionId, conversionProgress?.stage]);
+
+  const estimateConversionTime = (fileSizeMB: number): number => {
+    // Rough estimate: 1-2 seconds per MB, plus 5 seconds base time
+    return Math.ceil(5 + fileSizeMB * 1.5);
+  };
 
   const handleFileSelect = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
 
     const file = files[0];
+    setError(null);
 
     // Validate file type
     if (!file.name.toLowerCase().endsWith(".pdf")) {
-      toast.error("Please select a PDF file");
+      const msg = "Please select a PDF file. Other formats are not supported.";
+      setError(msg);
+      toast.error(msg);
       return;
     }
 
     // Validate file size (16MB)
-    const maxSizeMB = 16;
     const fileSizeMB = file.size / (1024 * 1024);
-    if (fileSizeMB > maxSizeMB) {
-      toast.error(`File size exceeds ${maxSizeMB}MB limit`);
+    if (fileSizeMB > MAX_FILE_SIZE_MB) {
+      const msg = `File size (${fileSizeMB.toFixed(2)}MB) exceeds ${MAX_FILE_SIZE_MB}MB limit. Please choose a smaller file.`;
+      setError(msg);
+      toast.error(msg);
       return;
+    }
+
+    // Warning for large files
+    if (fileSizeMB > FILE_SIZE_WARNING_MB) {
+      toast.warning(`Large file detected (${fileSizeMB.toFixed(2)}MB). Conversion may take longer.`);
     }
 
     // Read file and convert to base64
     const reader = new FileReader();
+    
+    reader.onerror = () => {
+      const msg = "Failed to read file. Please try again.";
+      setError(msg);
+      toast.error(msg);
+    };
+
     reader.onload = async (e) => {
-      const base64Data = (e.target?.result as string)?.split(",")[1];
-      if (!base64Data) {
-        toast.error("Failed to read file");
-        return;
-      }
-
-      setIsConverting(true);
-      setConversionProgress({
-        stage: "upload",
-        fileName: file.name,
-      });
-
       try {
+        const base64Data = (e.target?.result as string)?.split(",")[1];
+        if (!base64Data) {
+          const msg = "Failed to process file data. Please try again.";
+          setError(msg);
+          toast.error(msg);
+          return;
+        }
+
+        setIsConverting(true);
+        setError(null);
+        const estimatedTime = estimateConversionTime(fileSizeMB);
+        setConversionProgress({
+          stage: "upload",
+          fileName: file.name,
+          fileSizeMB: parseFloat(fileSizeMB.toFixed(2)),
+          estimatedTimeSeconds: estimatedTime,
+        });
+
         const result = await uploadMutation.mutateAsync({
           fileName: file.name,
           fileData: base64Data,
@@ -93,9 +133,11 @@ export default function Home() {
             : null
         );
 
-        toast.success("Conversion started!");
+        toast.success("Conversion started! Please wait...");
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Upload failed");
+        const errorMsg = error instanceof Error ? error.message : "Upload failed. Please try again.";
+        setError(errorMsg);
+        toast.error(errorMsg);
         setConversionProgress(null);
         setIsConverting(false);
       }
@@ -106,15 +148,19 @@ export default function Home() {
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragging(true);
   };
 
-  const handleDragLeave = () => {
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
     setIsDragging(false);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setIsDragging(false);
     handleFileSelect(e.dataTransfer.files);
   };
@@ -123,12 +169,10 @@ export default function Home() {
     if (!conversionProgress?.conversionId) return;
 
     try {
-      // Fetch download URL using tRPC query
       const downloadData = await utils.conversion.getDownloadUrl.fetch({
         conversionId: conversionProgress.conversionId,
       });
 
-      // Create a temporary link and download
       const link = document.createElement("a");
       link.href = downloadData.downloadUrl;
       link.download = downloadData.fileName || "document.docx";
@@ -139,10 +183,34 @@ export default function Home() {
       toast.success("Download started!");
       setConversionProgress(null);
       setIsConverting(false);
+      setError(null);
+      
+      // Invalidate history to refresh
+      utils.conversion.getHistory.invalidate();
     } catch (error) {
-      console.error("Download error:", error);
-      toast.error(error instanceof Error ? error.message : "Download failed");
+      const errorMsg = error instanceof Error ? error.message : "Download failed. Please try again.";
+      setError(errorMsg);
+      toast.error(errorMsg);
     }
+  };
+
+  const handleRetry = () => {
+    if (retryCount < 3) {
+      setRetryCount(retryCount + 1);
+      setError(null);
+      setConversionProgress(null);
+      setIsConverting(false);
+      fileInputRef.current?.click();
+    } else {
+      toast.error("Maximum retry attempts reached. Please try again later.");
+    }
+  };
+
+  const handleCancel = () => {
+    setConversionProgress(null);
+    setIsConverting(false);
+    setError(null);
+    setRetryCount(0);
   };
 
   if (!isAuthenticated) {
@@ -219,6 +287,44 @@ export default function Home() {
           </Card>
         </div>
 
+        {/* Error Alert */}
+        {error && (
+          <Card className="mb-6 p-4 border-red-200 bg-red-50">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
+              <div className="flex-1">
+                <h3 className="font-semibold text-red-900 mb-1">Conversion Error</h3>
+                <p className="text-sm text-red-800 mb-3">{error}</p>
+                <div className="flex gap-2">
+                  {retryCount < 3 && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-red-600 border-red-200 hover:bg-red-100"
+                      onClick={handleRetry}
+                    >
+                      Retry ({retryCount}/3)
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setError(null)}
+                  >
+                    Dismiss
+                  </Button>
+                </div>
+              </div>
+              <button
+                onClick={() => setError(null)}
+                className="text-red-600 hover:text-red-700"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </Card>
+        )}
+
         {/* Upload Area or Progress */}
         {!conversionProgress ? (
           <Card
@@ -231,6 +337,14 @@ export default function Home() {
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                fileInputRef.current?.click();
+              }
+            }}
+            aria-label="Upload PDF file"
           >
             <div className="p-12 text-center">
               <div className="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-br from-blue-100 to-indigo-100 rounded-full mb-4">
@@ -252,6 +366,7 @@ export default function Home() {
               accept=".pdf"
               onChange={(e) => handleFileSelect(e.target.files)}
               className="hidden"
+              aria-label="Select PDF file"
             />
           </Card>
         ) : (
@@ -269,13 +384,23 @@ export default function Home() {
                 {conversionProgress.stage === "processing" && "Converting..."}
                 {conversionProgress.stage === "completed" && "Conversion Complete!"}
               </h2>
-              <p className="text-slate-600 mb-6">
+              <p className="text-slate-600 mb-2">
                 {conversionProgress.fileName}
               </p>
+              {conversionProgress.fileSizeMB && (
+                <p className="text-sm text-slate-500 mb-2">
+                  File size: {conversionProgress.fileSizeMB}MB
+                </p>
+              )}
+              {conversionProgress.stage !== "completed" && conversionProgress.estimatedTimeSeconds && (
+                <p className="text-sm text-slate-500">
+                  Estimated time: ~{conversionProgress.estimatedTimeSeconds}s
+                </p>
+              )}
             </div>
 
             {/* Progress Stages */}
-            <div className="flex items-center justify-center gap-4 mb-8">
+            <div className="flex items-center justify-center gap-4 mb-8 flex-wrap">
               <div
                 className={`flex items-center gap-2 px-4 py-2 rounded-full ${
                   conversionProgress.stage !== "upload"
@@ -290,7 +415,7 @@ export default function Home() {
                 />
                 Upload
               </div>
-              <div className="w-8 h-0.5 bg-slate-300" />
+              <div className="w-8 h-0.5 bg-slate-300 hidden sm:block" />
               <div
                 className={`flex items-center gap-2 px-4 py-2 rounded-full ${
                   conversionProgress.stage === "completed"
@@ -309,7 +434,7 @@ export default function Home() {
                 />
                 Processing
               </div>
-              <div className="w-8 h-0.5 bg-slate-300" />
+              <div className="w-8 h-0.5 bg-slate-300 hidden sm:block" />
               <div
                 className={`flex items-center gap-2 px-4 py-2 rounded-full ${
                   conversionProgress.stage === "completed"
@@ -327,12 +452,33 @@ export default function Home() {
             </div>
 
             {conversionProgress.stage === "completed" && (
+              <div className="flex gap-3">
+                <Button
+                  size="lg"
+                  className="flex-1 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700"
+                  onClick={handleDownload}
+                >
+                  Download Word Document
+                </Button>
+                <Button
+                  size="lg"
+                  variant="outline"
+                  className="flex-1"
+                  onClick={handleCancel}
+                >
+                  Convert Another
+                </Button>
+              </div>
+            )}
+
+            {conversionProgress.stage !== "completed" && (
               <Button
                 size="lg"
-                className="w-full bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700"
-                onClick={handleDownload}
+                variant="outline"
+                className="w-full"
+                onClick={handleCancel}
               >
-                Download Word Document
+                Cancel Conversion
               </Button>
             )}
           </Card>
