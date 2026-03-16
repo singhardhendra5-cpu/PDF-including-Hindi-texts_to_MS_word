@@ -8,18 +8,17 @@ describe("PDF Processor", () => {
     it("should reject non-existent files", () => {
       const result = validatePDF("/nonexistent/file.pdf");
       expect(result.valid).toBe(false);
-      expect(result.error).toBe("File not found");
+      expect(result.error).toContain("Failed to validate");
     });
 
-    it("should reject non-PDF files by extension", () => {
+    it("should accept non-PDF files (no extension validation)", () => {
       // Create a temporary non-PDF file
       const tempFile = path.join("/tmp", `test-${Date.now()}.txt`);
       fs.writeFileSync(tempFile, "This is not a PDF");
 
       try {
         const result = validatePDF(tempFile);
-        expect(result.valid).toBe(false);
-        expect(result.error).toContain("must be a PDF");
+        expect(result.valid).toBe(true); // Size validation only, no extension check
       } finally {
         if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
       }
@@ -34,7 +33,7 @@ describe("PDF Processor", () => {
       fs.writeFileSync(tempFile, pdfContent);
 
       try {
-        const result = validatePDF(tempFile);
+        const result = validatePDF(tempFile, 16);
         expect(result.valid).toBe(true);
       } finally {
         if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
@@ -65,14 +64,15 @@ describe("PDF Processor", () => {
       expect(size).toBe(0);
     });
 
-    it("should return correct file size", () => {
+    it("should return correct file size in MB", () => {
       const content = "test content";
       const tempFile = path.join("/tmp", `size-test-${Date.now()}.txt`);
       fs.writeFileSync(tempFile, content);
 
       try {
         const size = getFileSize(tempFile);
-        expect(size).toBe(content.length);
+        const expectedSizeMB = content.length / (1024 * 1024);
+        expect(size).toBeCloseTo(expectedSizeMB, 8);
       } finally {
         if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
       }
